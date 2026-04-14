@@ -67,11 +67,21 @@ function broadcast(evento, datos) {
   });
 }
 
-// ─────────────────────────────────────────────────────
+// ── Detectar ruta de Chromium según el entorno
+const CHROME_PATH =
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  process.env.CHROME_BIN ||
+  '/usr/bin/chromium' ||
+  '/usr/bin/chromium-browser' ||
+  '/usr/bin/google-chrome';
+
+console.log(`🌐 Usando Chromium en: ${CHROME_PATH}`);
+
 const waClient = new Client({
   authStrategy: new LocalAuth({ dataPath: path.join(DATA_DIR, '.wwebjs_auth') }),
   puppeteer: {
     headless: true,
+    executablePath: CHROME_PATH,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -79,6 +89,7 @@ const waClient = new Client({
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
+      '--single-process',
       '--disable-gpu',
       '--disable-web-security',
       '--disable-features=IsolateOrigins,site-per-process',
@@ -294,7 +305,7 @@ waClient.on('message', async msg => {
 console.log('\n⏳ Iniciando bot de WhatsApp...\n');
 waClient.initialize().catch(err => {
   console.error('⚠️  Error al iniciar WhatsApp:', err.message);
-  console.log('El servidor sigue funcionando sin WhatsApp.\n');
+  console.log('El servidor REST sigue activo sin WhatsApp.\n');
 });
 
 // ─────────────────────────────────────────────────────
@@ -337,11 +348,7 @@ app.get('/pedidos/stream', (req, res) => {
   res.flushHeaders();
   res.write(`event: sync\ndata: ${JSON.stringify(pedidos)}\n\n`);
   clientes.push(res);
-  console.log(`📱 App conectada. Total: ${clientes.length}`);
-  req.on('close', () => {
-    clientes = clientes.filter(c => c !== res);
-    console.log(`📴 App desconectada. Total: ${clientes.length}`);
-  });
+  req.on('close', () => { clientes = clientes.filter(c => c !== res); });
 });
 
 app.post('/pedido', (req, res) => {
@@ -395,16 +402,6 @@ app.delete('/pedido/:id', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  const ips = getLocalIPs();
   console.log(`\n🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log('─'.repeat(50));
-  if (ips.length === 0) {
-    console.log(`   ⚠️  No se detectó IP local. Usa: http://localhost:${PORT}`);
-  } else {
-    ips.forEach(({ name, address }) => {
-      console.log(`   ✅ http://${address}:${PORT}  ← ${name}`);
-    });
-  }
-  console.log('─'.repeat(50));
-  console.log(`   Health check: http://localhost:${PORT}/health\n`);
+  console.log(`   Health: http://localhost:${PORT}/health\n`);
 });
