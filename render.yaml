@@ -2,7 +2,7 @@ services:
   - type: web
     name: whatsapp-bot-server
     env: node
-    buildCommand: npm install
+    buildCommand: apt-get update && apt-get install -y chromium && npm install
     startCommand: node server.js
     plan: free
     envVars:
@@ -10,3 +10,7 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "true"
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/chromium
