@@ -29,55 +29,6 @@ function guardarJSON(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-function getLocalIPs() {
-  const interfaces = os.networkInterfaces();
-  const ips = [];
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) ips.push({ name, address: iface.address });
-    }
-  }
-  return ips;
-}
-
-// ── Auto-detectar ruta de Chromium ──
-function findChromium() {
-  const candidatos = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    process.env.CHROME_BIN,
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/snap/bin/chromium',
-    '/usr/local/bin/chromium',
-    '/usr/local/bin/chromium-browser',
-  ].filter(Boolean);
-
-  for (const p of candidatos) {
-    if (fs.existsSync(p)) {
-      console.log(`✅ Chromium encontrado en: ${p}`);
-      return p;
-    }
-  }
-
-  // Intentar con 'which'
-  try {
-    const { execSync } = require('child_process');
-    const found = execSync('which chromium || which chromium-browser || which google-chrome 2>/dev/null')
-      .toString().trim().split('\n')[0];
-    if (found && fs.existsSync(found)) {
-      console.log(`✅ Chromium detectado con which: ${found}`);
-      return found;
-    }
-  } catch {}
-
-  console.warn('⚠️  No se encontró Chromium. Bot WhatsApp no estará disponible.');
-  return null;
-}
-
-const CHROME_PATH = findChromium();
-
 let pedidos  = leerJSON(PEDIDOS_FILE,  []);
 let catalogo = leerJSON(CATALOGO_FILE, []);
 let sesiones = leerJSON(SESIONES_FILE, {});
@@ -103,29 +54,69 @@ function broadcast(evento, datos) {
   });
 }
 
-// ── Inicializar cliente WhatsApp solo si hay Chromium ──
-const puppeteerOpts = {
-  headless: true,
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-accelerated-2d-canvas',
-    '--no-first-run',
-    '--no-zygote',
-    '--single-process',
-    '--disable-gpu',
-    '--disable-web-security',
-    '--disable-features=IsolateOrigins,site-per-process',
-  ],
-  timeout: 60000,
-};
+// ── Obtener ruta de Chromium incluido en puppeteer ──
+function getChromiumPath() {
+  try {
+    // puppeteer v21+ usa executablePath() directamente
+    const puppeteer = require('puppeteer');
+    const chromePath = puppeteer.executablePath();
+    if (chromePath && fs.existsSync(chromePath)) {
+      console.log(`✅ Chromium de puppeteer: ${chromePath}`);
+      return chromePath;
+    }
+  } catch (e) {
+    console.warn('puppeteer.executablePath() falló:', e.message);
+  }
 
-if (CHROME_PATH) puppeteerOpts.executablePath = CHROME_PATH;
+  // Rutas manuales de fallback
+  const fallbacks = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/opt/render/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome',
+    '/root/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome',
+    '/home/render/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome',
+  ].filter(Boolean);
+
+  for (const pattern of fallbacks) {
+    if (!pattern.includes('*')) {
+      if (fs.existsSync(pattern)) {
+        console.log(`✅ Chromium en: ${pattern}`);
+        return pattern;
+      }
+    } else {
+      try {
+        const { execSync } = require('child_process');
+        const found = execSync(`ls ${pattern} 2>/dev/null | head -1`).toString().trim();
+        if (found && fs.existsSync(found)) {
+          console.log(`✅ Chromium glob: ${found}`);
+          return found;
+        }
+      } catch {}
+    }
+  }
+
+  console.warn('⚠️  No se encontró Chromium — bot WhatsApp desactivado');
+  return null;
+}
+
+const CHROME_PATH = getChromiumPath();
 
 const waClient = new Client({
   authStrategy: new LocalAuth({ dataPath: path.join(DATA_DIR, '.wwebjs_auth') }),
-  puppeteer: puppeteerOpts,
+  puppeteer: {
+    headless: true,
+    executablePath: CHROME_PATH || undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-gpu',
+    ],
+    timeout: 60000,
+  },
   restartOnAuthFail: true,
 });
 
@@ -150,7 +141,7 @@ waClient.on('auth_failure', msg => {
 
 waClient.on('disconnected', reason => {
   botListo = false;
-  console.log('📴 Desconectado:', reason, '| Reconectando en 5s...');
+  console.log('📴 Desconectado:', reason, '— reconectando en 5s...');
   setTimeout(() => waClient.initialize().catch(() => {}), 5000);
 });
 
@@ -217,20 +208,19 @@ waClient.on('message', async msg => {
 
   console.log(`📨 [${telefono}]: ${texto}`);
 
-  if (['hola', 'menu', 'menú', 'inicio', 'hi', 'buenas', '0'].includes(lower)) {
+  if (['hola','menu','menú','inicio','hi','buenas','0'].includes(lower)) {
     sesion.paso = 'menu';
     guardarJSON(SESIONES_FILE, sesiones);
     return waClient.sendMessage(msg.from, menuPrincipal(sesion.nombre));
   }
 
-  if (['cancelar', 'limpiar', '5'].includes(lower)) {
-    sesion.carrito = [];
-    sesion.paso    = 'menu';
+  if (['cancelar','limpiar','5'].includes(lower)) {
+    sesion.carrito = []; sesion.paso = 'menu';
     guardarJSON(SESIONES_FILE, sesiones);
     return waClient.sendMessage(msg.from, '🗑️ Carrito limpiado. Escribe *hola* para volver.');
   }
 
-  if (['catalogo', 'catálogo', '1', 'productos', 'ver catalogo'].includes(lower)) {
+  if (['catalogo','catálogo','1','productos','ver catalogo'].includes(lower)) {
     sesion.paso = 'catalogo';
     guardarJSON(SESIONES_FILE, sesiones);
     await waClient.sendMessage(msg.from, textoCatalogo());
@@ -244,15 +234,14 @@ waClient.on('message', async msg => {
     return;
   }
 
-  if (['pedir', 'pedido', '2', 'ordenar', 'hacer pedido'].includes(lower)) {
+  if (['pedir','pedido','2','ordenar','hacer pedido'].includes(lower)) {
     sesion.paso = 'esperando_producto';
     guardarJSON(SESIONES_FILE, sesiones);
     return waClient.sendMessage(msg.from, `🛒 ¿Qué producto quieres?\n\n${textoCatalogo()}`);
   }
 
   if (sesion.paso === 'esperando_nombre') {
-    sesion.nombre = texto;
-    sesion.paso   = 'menu';
+    sesion.nombre = texto; sesion.paso = 'menu';
     guardarJSON(SESIONES_FILE, sesiones);
     return waClient.sendMessage(msg.from, menuPrincipal(texto));
   }
@@ -268,10 +257,9 @@ waClient.on('message', async msg => {
     else sesion.carrito.push({ id: prod.id, nombre: prod.nombre, precio: prod.precio, cantidad: 1 });
     sesion.paso = 'en_carrito';
     guardarJSON(SESIONES_FILE, sesiones);
-    if (prod.imagenB64) {
+    if (prod.imagenB64)
       await enviarImagenBase64(msg.from, prod.imagenB64,
         `*${prod.nombre}* — RD$${Number(prod.precio).toLocaleString('es-DO')}`);
-    }
     const total = sesion.carrito.reduce((s, c) => s + c.precio * c.cantidad, 0);
     return waClient.sendMessage(msg.from,
       `✅ *${prod.nombre}* agregado!\n💰 RD$${Number(prod.precio).toLocaleString('es-DO')}\n\n` +
@@ -280,7 +268,7 @@ waClient.on('message', async msg => {
       `Escribe *pedir [producto]* para más o *confirmar* para finalizar`);
   }
 
-  if (['carrito', 'ver carrito', '3'].includes(lower)) {
+  if (['carrito','ver carrito','3'].includes(lower)) {
     if (sesion.carrito.length === 0)
       return waClient.sendMessage(msg.from, '🛒 Tu carrito está vacío.');
     const total = sesion.carrito.reduce((s, c) => s + c.precio * c.cantidad, 0);
@@ -290,7 +278,7 @@ waClient.on('message', async msg => {
     return waClient.sendMessage(msg.from, resp);
   }
 
-  if (['confirmar', '4', 'si', 'sí', 'ok', 'dale', 'confirmo'].includes(lower)) {
+  if (['confirmar','4','si','sí','ok','dale','confirmo'].includes(lower)) {
     if (sesion.carrito.length === 0)
       return waClient.sendMessage(msg.from, '🛒 Tu carrito está vacío.');
     const total  = sesion.carrito.reduce((s, c) => s + c.precio * c.cantidad, 0);
@@ -308,8 +296,7 @@ waClient.on('message', async msg => {
     pedidos.unshift(pedido);
     guardarPedidos();
     broadcast('nuevo_pedido', pedido);
-    sesion.carrito = [];
-    sesion.paso    = 'menu';
+    sesion.carrito = []; sesion.paso = 'menu';
     guardarJSON(SESIONES_FILE, sesiones);
     return waClient.sendMessage(msg.from,
       `✅ *¡Pedido confirmado!*\n\n🆔 *${pedido.id}*\n💰 RD$${total.toLocaleString('es-DO')}\n\n⏳ Te confirmamos pronto.`);
@@ -332,13 +319,13 @@ waClient.initialize().catch(err => {
 
 // ── REST API ──
 app.get('/health', (req, res) => res.json({
-  ok: true,
-  pedidos: pedidos.length,
-  catalogo: catalogo.length,
+  ok:         true,
+  pedidos:    pedidos.length,
+  catalogo:   catalogo.length,
   conectados: clientes.length,
-  chromium: CHROME_PATH || 'no encontrado',
-  botWA: botListo ? `✅ ${waClient.info?.wid?.user}` : '⏳ Conectando...',
-  hora: new Date().toLocaleTimeString('es-DO'),
+  chromium:   CHROME_PATH || 'no encontrado',
+  botWA:      botListo ? `✅ ${waClient.info?.wid?.user}` : '⏳ Conectando...',
+  hora:       new Date().toLocaleTimeString('es-DO'),
 }));
 
 app.get('/catalogo', (req, res) => res.json(catalogo));
@@ -397,7 +384,7 @@ app.post('/pedido', (req, res) => {
 app.patch('/pedido/:id/estado', (req, res) => {
   const { id } = req.params;
   const { estado } = req.body;
-  const validos = ['pendiente', 'confirmado', 'entregado', 'cancelado'];
+  const validos = ['pendiente','confirmado','entregado','cancelado'];
   if (!validos.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
   const pedido = pedidos.find(p => p.id === id);
   if (!pedido) return res.status(404).json({ error: 'No encontrado' });
