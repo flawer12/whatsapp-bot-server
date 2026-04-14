@@ -1,14 +1,6 @@
 services:
   - type: web
     name: whatsapp-bot-server
-    env: node
-    buildCommand: npm install
+    runtime: node
+    buildCommand: echo 'desactivado'
     startCommand: node server.js
-    plan: free
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: 10000
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "false"
